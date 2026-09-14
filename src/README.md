@@ -5,7 +5,12 @@ A super simple FastAPI application that allows students to view and sign up for 
 ## Features
 
 - View all available extracurricular activities
-- Sign up for activities
+- Teachers can sign up and unregister students after logging in
+- Students can view activities and current participants without logging in
+
+The default exercise teacher account is `teacher` / `teacher`. Change the
+credential entry in `teacher_credentials.json` before using the application
+outside local development.
 
 ## Getting Started
 
@@ -48,3 +53,7 @@ The application uses a simple data model with meaningful identifiers:
    - Grade level
 
 All data is stored in memory, which means data will be reset when the server restarts.
+
+Teacher credentials are stored as salted PBKDF2 hashes in
+`teacher_credentials.json`. Login tokens are held in memory and expire when
+the server restarts.

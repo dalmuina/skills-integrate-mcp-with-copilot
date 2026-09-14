@@ -3,6 +3,34 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const signupContainer = document.getElementById("signup-container");
+  const loginButton = document.getElementById("login-button");
+  const logoutButton = document.getElementById("logout-button");
+  const teacherStatus = document.getElementById("teacher-status");
+  const loginDialog = document.getElementById("login-dialog");
+  const loginForm = document.getElementById("login-form");
+  const loginMessage = document.getElementById("login-message");
+  const cancelLogin = document.getElementById("cancel-login");
+  let authToken = localStorage.getItem("teacherToken");
+
+  function authHeaders() {
+    return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+  }
+
+  function setAuthenticated(username) {
+    const authenticated = Boolean(username);
+    signupContainer.classList.toggle("hidden", !authenticated);
+    loginButton.classList.toggle("hidden", authenticated);
+    logoutButton.classList.toggle("hidden", !authenticated);
+    teacherStatus.classList.toggle("hidden", !authenticated);
+    teacherStatus.textContent = authenticated ? `Logged in as ${username}` : "";
+  }
+
+  function showLoginMessage(message, type = "error") {
+    loginMessage.textContent = message;
+    loginMessage.className = type;
+    loginMessage.classList.remove("hidden");
+  }
 
   // Function to fetch activities from API
   async function fetchActivities() {
@@ -12,6 +40,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Clear loading message
       activitiesList.innerHTML = "";
+      activitySelect.innerHTML = '<option value="">-- Select an activity --</option>';
 
       // Populate activities list
       Object.entries(activities).forEach(([name, details]) => {
@@ -24,13 +53,17 @@ document.addEventListener("DOMContentLoaded", () => {
         // Create participants HTML with delete icons instead of bullet points
         const participantsHTML =
           details.participants.length > 0
-            ? `<div class="participants-section">
+              ? `<div class="participants-section">
               <h5>Participants:</h5>
               <ul class="participants-list">
                 ${details.participants
                   .map(
                     (email) =>
-                      `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`
+                      `<li><span class="participant-email">${email}</span>${
+                        authToken
+                          ? `<button class="delete-btn" data-activity="${name}" data-email="${email}">Remove</button>`
+                          : ""
+                      }</li>`
                   )
                   .join("")}
               </ul>
@@ -80,6 +113,7 @@ document.addEventListener("DOMContentLoaded", () => {
         )}/unregister?email=${encodeURIComponent(email)}`,
         {
           method: "DELETE",
+          headers: authHeaders(),
         }
       );
 
@@ -124,6 +158,7 @@ document.addEventListener("DOMContentLoaded", () => {
         )}/signup?email=${encodeURIComponent(email)}`,
         {
           method: "POST",
+          headers: authHeaders(),
         }
       );
 
@@ -155,6 +190,68 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  loginButton.addEventListener("click", () => {
+    loginMessage.className = "hidden";
+    loginForm.reset();
+    loginDialog.showModal();
+  });
+
+  cancelLogin.addEventListener("click", () => loginDialog.close());
+
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const username = document.getElementById("username").value;
+    const password = document.getElementById("password").value;
+
+    try {
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        showLoginMessage(result.detail || "Login failed");
+        return;
+      }
+
+      authToken = result.token;
+      localStorage.setItem("teacherToken", authToken);
+      setAuthenticated(result.username);
+      loginDialog.close();
+      fetchActivities();
+    } catch (error) {
+      showLoginMessage("Unable to log in. Please try again.");
+      console.error("Error logging in:", error);
+    }
+  });
+
+  logoutButton.addEventListener("click", () => {
+    authToken = null;
+    localStorage.removeItem("teacherToken");
+    setAuthenticated(null);
+    fetchActivities();
+  });
+
   // Initialize app
-  fetchActivities();
+  async function initialize() {
+    if (authToken) {
+      try {
+        const response = await fetch("/auth/me", { headers: authHeaders() });
+        if (response.ok) {
+          const teacher = await response.json();
+          setAuthenticated(teacher.username);
+        } else {
+          authToken = null;
+          localStorage.removeItem("teacherToken");
+        }
+      } catch (error) {
+        console.error("Error restoring teacher session:", error);
+      }
+    }
+    setAuthenticated(authToken ? teacherStatus.textContent.replace("Logged in as ", "") : null);
+    fetchActivities();
+  }
+
+  initialize();
 });

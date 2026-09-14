@@ -5,14 +5,59 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+import hashlib
+import hmac
+import json
+import secrets
+from pathlib import Path
+
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 import os
-from pathlib import Path
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
+
+credentials_path = Path(__file__).resolve().parent.parent / "teacher_credentials.json"
+with credentials_path.resolve().open(encoding="utf-8") as credentials_file:
+    teacher_credentials = json.load(credentials_file)["teachers"]
+
+active_tokens: dict[str, str] = {}
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+def authenticate_teacher(username: str, password: str) -> bool:
+    """Check a teacher password against the configured salted hash."""
+    for teacher in teacher_credentials:
+        if teacher["username"] != username:
+            continue
+        password_hash = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode(),
+            teacher["salt"].encode(),
+            120000,
+        ).hex()
+        return hmac.compare_digest(password_hash, teacher["password_hash"])
+    return False
+
+
+def require_teacher(authorization: str | None = Header(default=None)) -> str:
+    """Require an active bearer token issued to a teacher."""
+    scheme, _, token = (authorization or "").partition(" ")
+    username = active_tokens.get(token) if scheme.lower() == "bearer" else None
+    if username is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Teacher login required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return username
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
@@ -83,13 +128,30 @@ def root():
     return RedirectResponse(url="/static/index.html")
 
 
+@app.post("/auth/login")
+def login(credentials: LoginRequest):
+    """Issue a bearer token after validating a teacher's credentials."""
+    if not authenticate_teacher(credentials.username, credentials.password):
+        raise HTTPException(status_code=401, detail="Invalid teacher credentials")
+
+    token = secrets.token_urlsafe(32)
+    active_tokens[token] = credentials.username
+    return {"token": token, "username": credentials.username}
+
+
+@app.get("/auth/me")
+def current_teacher(username: str = Depends(require_teacher)):
+    """Return the currently authenticated teacher."""
+    return {"username": username}
+
+
 @app.get("/activities")
 def get_activities():
     return activities
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(activity_name: str, email: str, _: str = Depends(require_teacher)):
     """Sign up a student for an activity"""
     # Validate activity exists
     if activity_name not in activities:
@@ -111,7 +173,9 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(
+    activity_name: str, email: str, _: str = Depends(require_teacher)
+):
     """Unregister a student from an activity"""
     # Validate activity exists
     if activity_name not in activities:
